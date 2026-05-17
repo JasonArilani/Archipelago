@@ -1,10 +1,12 @@
 from BaseClasses import ItemClassification, Region
 from worlds.AutoWorld import WebWorld, World
 from worlds.generic.Rules import set_rule
+from worlds.LauncherComponents import Component, Type, components, launch
 
 from .Items import EternalDarknessItem, ITEM_TABLE, get_item_classification
 from .Locations import EternalDarknessLocation, LOCATION_TABLE
 from .Options import EternalDarknessOptions
+
 
 
 class EternalDarknessWeb(WebWorld):
@@ -97,6 +99,17 @@ class EternalDarknessWorld(World):
         for item_name in ITEM_TABLE:
             self.multiworld.itempool.append(self.create_item(item_name))
 
+    def fill_slot_data(self) -> dict:
+        alignment_by_value = {
+            0: "chatturgha",
+            1: "ulyaoth",
+            2: "xelotath",
+        }
+
+        return {
+            "anthony_alignment": alignment_by_value[int(self.options.anthony_alignment.value)]
+        }
+
     def set_rules(self) -> None:
         victory_location = self.multiworld.get_location(
             "Anthony - Bishop Defeated",
@@ -119,3 +132,19 @@ class EternalDarknessWorld(World):
         self.multiworld.completion_condition[self.player] = (
             lambda state: state.has("Victory", self.player)
         )
+        
+    def launch_eternal_darkness_client(*args: str):
+        from .Client import run_client
+        launch(run_client, name="Eternal Darkness Client", args=args)
+
+
+    components.append(
+        Component(
+            "Eternal Darkness Client",
+            func=launch_eternal_darkness_client,
+            component_type=Type.CLIENT,
+            game_name="Eternal Darkness",
+            supports_uri=True,
+            description="Connect Eternal Darkness: Sanity's Requiem to an Archipelago multiworld.",
+        )
+    )
