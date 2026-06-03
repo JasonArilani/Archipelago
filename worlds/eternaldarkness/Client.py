@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import time
 
 import pymem
 import pymem.memory
@@ -13,25 +12,22 @@ from NetUtils import ClientStatus
 PROCESS_NAME = "Dolphin.exe"
 GC_RAM_BASE = 0x80000000
 
-CHECK_FLAGS = 0x80725EB0
-GOAL_FLAG = 0x80725E52
+# New pickup-based check detection
+CURRENT_CHAPTER = 0x8030411F
+LAST_PICKUP_ID = 0x803039EB
 
+ANTHONY_CHAPTER = 0x03
+
+# Goal detection
+GOAL_FLAG = 0x80725E52
+GOAL_MASK = 0x01
+
+# Magick memory
 MEM = {
     "codices": 0x80331748,
     "runes": 0x8033174A,
     "circles": 0x8033174C,
     "scrolls": 0x80331750,
-}
-
-LOCATION_FLAGS = {
-    0x01: "Anthony - 3 Point Circle",
-    0x02: "Anthony - Weak Alignment Rune",
-    0x04: "Anthony - Antorbok Rune",
-    0x08: "Anthony - Magormor Rune",
-    0x10: "Anthony - Weak Alignment Codex",
-    0x20: "Anthony - Antorbok Codex",
-    0x40: "Anthony - Magormor Codex",
-    0x80: "Anthony - Enchant Item Scroll",
 }
 
 LOCATION_NAME_TO_ID = {
@@ -78,6 +74,19 @@ ALIGNMENT_ROUTES = {
 }
 
 
+def build_pickup_location_table(route):
+    return {
+        (ANTHONY_CHAPTER, 0x3F): "Anthony - 3 Point Circle",
+        (ANTHONY_CHAPTER, 0x54): "Anthony - Weak Alignment Rune",
+        (ANTHONY_CHAPTER, 0x29): "Anthony - Antorbok Rune",
+        (ANTHONY_CHAPTER, 0x36): "Anthony - Magormor Rune",
+        (ANTHONY_CHAPTER, 0x4B): "Anthony - Weak Alignment Codex",
+        (ANTHONY_CHAPTER, 0x47): "Anthony - Antorbok Codex",
+        (ANTHONY_CHAPTER, 0x40): "Anthony - Magormor Codex",
+        (ANTHONY_CHAPTER, 0x46): "Anthony - Enchant Item Scroll",
+    }
+
+
 def proc_addr(ram_base, effective_addr):
     return ram_base + (effective_addr - GC_RAM_BASE)
 
@@ -103,7 +112,7 @@ def write_u32(pm, ram_base, effective_addr, value):
 
 
 def find_ram_base(pm):
-    print("Finding Dolphin RAM base...")
+    logging.info("Finding Dolphin RAM base...")
 
     addr = 0
     candidates = []
@@ -125,10 +134,10 @@ def find_ram_base(pm):
                 codices = read_u16(pm, base, MEM["codices"])
                 runes = read_u16(pm, base, MEM["runes"])
                 circles = read_u16(pm, base, MEM["circles"])
-                flags = read_u8(pm, base, CHECK_FLAGS)
+                chapter = read_u8(pm, base, CURRENT_CHAPTER)
 
-                if codices <= 0x3FFF and runes <= 0x3FFF and circles <= 0x0007:
-                    candidates.append((base, size, codices, runes, circles, flags))
+                if codices <= 0x3FFF and runes <= 0x3FFF and circles <= 0x0007 and chapter <= 0x0B:
+                    candidates.append((base, size, codices, runes, circles, chapter))
             except Exception:
                 pass
 
@@ -138,20 +147,20 @@ def find_ram_base(pm):
     exact = [c for c in candidates if c[1] == 0x4000000]
 
     if exact:
-        base, size, codices, runes, circles, flags = exact[0]
+        base, size, codices, runes, circles, chapter = exact[0]
     elif candidates:
-        base, size, codices, runes, circles, flags = candidates[0]
+        base, size, codices, runes, circles, chapter = candidates[0]
     else:
-        raise RuntimeError("Could not find RAM base.")
+        raise RuntimeError("Could not find Dolphin RAM base.")
 
-    print(
-        "Using RAM base:",
+    logging.info(
+        "Using RAM base: %s size %s codices=%04X runes=%04X circles=%04X chapter=%02X",
         hex(base),
-        "size", hex(size),
-        f"codices={codices:04X}",
-        f"runes={runes:04X}",
-        f"circles={circles:04X}",
-        f"flags={flags:02X}",
+        hex(size),
+        codices,
+        runes,
+        circles,
+        chapter,
     )
 
     return base
@@ -242,7 +251,7 @@ def grant_item(pm, ram_base, expected, route, item_name):
         current = read_u32(pm, ram_base, MEM["scrolls"])
         new = current | bit
         write_u32(pm, ram_base, MEM["scrolls"], new)
-        print(f"RECEIVED: {item_name} | scrolls {current:08X}->{new:08X}")
+        logging.info("RECEIVED: %s | scrolls %08X->%08X", item_name, current, new)
         return
 
     before = expected[category]
@@ -250,7 +259,7 @@ def grant_item(pm, ram_base, expected, route, item_name):
     after = expected[category]
 
     write_core_state(pm, ram_base, expected)
-    print(f"RECEIVED: {item_name} | {category} {before:04X}->{after:04X}")
+    logging.info("RECEIVED: %s | %s %04X->%04X", item_name, category, before, after)
 
 
 class EternalDarknessContext(CommonContext):
@@ -262,6 +271,8 @@ class EternalDarknessContext(CommonContext):
         super().__init__(server_address, password)
 
         self.route = None
+        self.pickup_location_table = {}
+
         self.pm = None
         self.ram_base = None
 
@@ -273,9 +284,18 @@ class EternalDarknessContext(CommonContext):
         }
 
         self.processed_item_count = 0
-        self.seen_flags = 0
+        self.last_seen_pickup_id = None
+        self.sent_pickup_locations = set()
         self.goal_done = False
-        
+
+    async def server_auth(self, password_requested: bool = False):
+        if password_requested and not self.password:
+            logging.info("Password required.")
+            self.password = await self.console_input()
+
+        await self.get_username()
+        await self.send_connect()
+
     def on_package(self, cmd: str, args: dict):
         super().on_package(cmd, args)
 
@@ -283,21 +303,24 @@ class EternalDarknessContext(CommonContext):
             slot_data = args.get("slot_data", {})
             route_key = slot_data.get("anthony_alignment", "chatturgha")
 
+            if isinstance(route_key, int):
+                route_key = {
+                    0: "chatturgha",
+                    1: "ulyaoth",
+                    2: "xelotath",
+                }.get(route_key, "chatturgha")
+
+            route_key = str(route_key).lower()
+
             if route_key not in ALIGNMENT_ROUTES:
                 route_key = "chatturgha"
 
             self.route = ALIGNMENT_ROUTES[route_key]
+            self.pickup_location_table = build_pickup_location_table(self.route)
 
-            print("Route:", self.route["display"])
-            print("Weak alignment:", self.route["weak_name"])
-
-    async def server_auth(self, password_requested: bool = False):
-        if password_requested and not self.password:
-            print("Password required:")
-            self.password = await self.console_input()
-
-        await self.get_username()
-        await self.send_connect()
+            logging.info("Received slot data: %s", slot_data)
+            logging.info("Route: %s", self.route["display"])
+            logging.info("Weak alignment: %s", self.route["weak_name"])
 
 
 async def game_watcher(ctx: EternalDarknessContext):
@@ -310,10 +333,12 @@ async def game_watcher(ctx: EternalDarknessContext):
         if ctx.pm is None:
             try:
                 ctx.pm = pymem.Pymem(PROCESS_NAME)
-                print("Connected to Dolphin.")
+                logging.info("Connected to Dolphin.")
                 ctx.ram_base = find_ram_base(ctx.pm)
-            except Exception as e:
-                # Dolphin may not be open yet. Keep trying quietly.
+
+                ctx.last_seen_pickup_id = read_u8(ctx.pm, ctx.ram_base, LAST_PICKUP_ID)
+                logging.info("Initial last pickup ID: %02X", ctx.last_seen_pickup_id)
+            except Exception:
                 await asyncio.sleep(1)
                 continue
 
@@ -326,32 +351,51 @@ async def game_watcher(ctx: EternalDarknessContext):
 
                 item_name = ITEM_ID_TO_NAME.get(network_item.item)
                 if item_name is None:
-                    print(f"Received unknown item id {network_item.item}; ignoring.")
+                    logging.info("Received unknown item id %s; ignoring.", network_item.item)
                     continue
 
                 grant_item(ctx.pm, ctx.ram_base, ctx.expected, ctx.route, item_name)
                 police_memory(ctx.pm, ctx.ram_base, ctx.expected)
 
-            flags = read_u8(ctx.pm, ctx.ram_base, CHECK_FLAGS)
-            new_flags = flags & ~ctx.seen_flags
+            chapter = read_u8(ctx.pm, ctx.ram_base, CURRENT_CHAPTER)
+            pickup_id = read_u8(ctx.pm, ctx.ram_base, LAST_PICKUP_ID)
 
-            if new_flags:
-                for mask, location_name in LOCATION_FLAGS.items():
-                    if new_flags & mask:
-                        location_id = LOCATION_NAME_TO_ID[location_name]
+            if ctx.last_seen_pickup_id is None:
+                ctx.last_seen_pickup_id = pickup_id
+
+            if pickup_id != ctx.last_seen_pickup_id:
+                old_pickup_id = ctx.last_seen_pickup_id
+                ctx.last_seen_pickup_id = pickup_id
+
+                logging.info(
+                    "Pickup changed: chapter=%02X item=%02X->%02X",
+                    chapter,
+                    old_pickup_id,
+                    pickup_id,
+                )
+
+                location_name = ctx.pickup_location_table.get((chapter, pickup_id))
+
+                if location_name:
+                    location_id = LOCATION_NAME_TO_ID[location_name]
+
+                    if location_name not in ctx.sent_pickup_locations:
                         sent = await ctx.check_locations([location_id])
+                        ctx.sent_pickup_locations.add(location_name)
 
                         if sent:
-                            print(f"CHECKED: {location_name}")
+                            logging.info("CHECKED: %s", location_name)
                         else:
-                            print(f"CHECKED locally, already known by AP: {location_name}")
-
-                ctx.seen_flags |= new_flags
+                            logging.info("CHECKED locally, already known by AP: %s", location_name)
+                    else:
+                        logging.info("Ignored duplicate pickup check: %s", location_name)
+                else:
+                    logging.info("Ignored unmapped pickup: chapter=%02X item=%02X", chapter, pickup_id)
 
             if not ctx.goal_done:
                 goal_byte = read_u8(ctx.pm, ctx.ram_base, GOAL_FLAG)
-                if goal_byte & 0x01:
-                    print("GOAL COMPLETE: Bishop defeated")
+                if goal_byte & GOAL_MASK:
+                    logging.info("GOAL COMPLETE: Bishop defeated")
                     ctx.goal_done = True
                     ctx.finished_game = True
                     await ctx.send_msgs([{
@@ -360,51 +404,12 @@ async def game_watcher(ctx: EternalDarknessContext):
                     }])
 
         except Exception as e:
-            print(f"Memory watcher error: {e}")
-            print("Lost Dolphin memory connection. Retrying...")
+            logging.info("Memory watcher error: %s", e)
+            logging.info("Lost Dolphin memory connection. Retrying...")
             ctx.pm = None
             ctx.ram_base = None
+            ctx.last_seen_pickup_id = None
             await asyncio.sleep(1)
-
-
-async def main():
-    Utils.init_logging("EternalDarknessClient", exception_logger="Client")
-
-    route_key = input("Route alignment (chatturgha / ulyaoth / xelotath): ").strip().lower()
-    if route_key not in ALIGNMENT_ROUTES:
-        print("Unknown route. Defaulting to chatturgha.")
-        route_key = "chatturgha"
-
-    route = ALIGNMENT_ROUTES[route_key]
-    print("Route:", route["display"])
-    print("Weak alignment:", route["weak_name"])
-
-    server_address = input("AP server address [localhost:38281]: ").strip()
-    if not server_address:
-        server_address = "localhost:38281"
-
-    slot_name = input("Slot name [Jason]: ").strip()
-    if not slot_name:
-        slot_name = "Jason"
-
-    password = input("Password, if any [blank]: ").strip() or None
-
-    ctx = EternalDarknessContext(server_address, password)
-    ctx.route = route
-    ctx.auth = slot_name
-
-    print("Connecting to AP server...")
-    ctx.server_task = asyncio.create_task(server_loop(ctx), name="server loop")
-    ctx.watcher_task = asyncio.create_task(game_watcher(ctx), name="game watcher")
-
-    try:
-        await ctx.exit_event.wait()
-    finally:
-        await ctx.shutdown()
-
-
-def run_client(*args: str):
-    asyncio.run(main())
 
 
 def run_client(*args: str):
