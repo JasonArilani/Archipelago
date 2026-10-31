@@ -4,5 +4,7 @@
   "world_version": "0.1.0",
   "authors": [
     "JasonArilani"
-  ]
+  ],
+  "version": 7,
+  "compatible_version": 7
 }

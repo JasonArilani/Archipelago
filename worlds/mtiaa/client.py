@@ -77,6 +77,54 @@ class MTIAAContext(BaseMTIAAContext):
             self.username = None
         await super().connect(address)
 
+
+    def _clear_tracker_connection(self):
+        """Clear disconnected UT state while remaining an AP *game* client.
+
+        TrackerGameContext.disconnect() normally performs this cleanup only
+        when the connection has a ``Tracker`` tag. MTIAA must omit that tag,
+        so we perform the necessary cleanup ourselves instead.
+        """
+        self._server_connected = False
+        self._items_ready = False
+        self._seed = None
+        if not TRACKER_AVAILABLE:
+            return
+
+        # Clear the UI before disposing of the old generated tracker world.
+        self.set_page('Connect to a slot to start tracking!')
+        for field, value in (
+            ('tracker_total_locs_label', 'Locations: 0/0'),
+            ('tracker_logic_locs_label', 'In Logic: 0'),
+            ('tracker_glitched_locs_label', 'Glitched: 0'),
+            ('tracker_hinted_locs_label', 'Hinted: 0'),
+            ('tracker_go_mode_label', 'Go Mode: No'),
+        ):
+            label = getattr(self, field, None)
+            if label is not None:
+                label.text = value
+        if self.ui is not None:
+            if hasattr(self.ui, 'show_map'):
+                self.ui.show_map = False
+            if hasattr(self.ui, 'show_items'):
+                self.ui.show_items = False
+        self.tracker_core.disconnect()
+        self.tracker_world = None
+        self.local_items.clear()
+
+    async def disconnect(self, allow_autoreconnect=False):
+        # User-initiated disconnect, including connect-to-different-room.
+        self._clear_tracker_connection()
+        await super().disconnect(allow_autoreconnect)
+
+    async def connection_closed(self):
+        # Also handles the room/server closing unexpectedly. Must not mark
+        # the user as intentionally disconnected, so auto-reconnect still works.
+        try:
+            await super().connection_closed()
+        finally:
+            self._clear_tracker_connection()
+
     async def server_auth(self, password_requested=False):
         await super().server_auth(password_requested)
         await self.get_username()

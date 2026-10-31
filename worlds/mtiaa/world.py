@@ -237,10 +237,37 @@ class MTIAAWorld(World):
     location_name_to_id = LOCATIONS
     options_dataclass = MTIAAOptions
 
+    @staticmethod
+    def interpret_slot_data(slot_data: dict) -> dict:
+        """Let Universal Tracker regenerate with the actual seed's resolved settings.
+
+        Random Start must use the character selected when the seed was generated,
+        rather than allowing the tracker's separate generation to roll again.
+        """
+        return slot_data
+
     def generate_early(self) -> None:
+        # Universal Tracker rebuilds a world independently. Its regenerated
+        # randomness and YAML options may differ from the room's actual seed.
+        # Keep the authoritative starting character and ending options from
+        # slot_data when UT supplies them through re_gen_passthrough.
+        passthrough = getattr(self.multiworld, "re_gen_passthrough", None)
+        saved = passthrough.get(GAME) if isinstance(passthrough, dict) else None
+        if isinstance(saved, dict):
+            resolved = saved.get("starting_character")
+            goal = saved.get("goal")
+            full = saved.get("full_ending")
+            if (type(resolved) is int and resolved in (0, 1, 2, 4)
+                    and type(goal) is int and goal in range(5)
+                    and isinstance(full, (bool, int))):
+                self.resolved_start = resolved
+                self.starting_mask = 7 if resolved == 4 else 1 << resolved
+                self.options.goal.value = goal
+                self.options.full_ending.value = int(bool(full))
+                return
+
         option = self.options.starting_character.value
-        # Select exactly once during generation, not each time a user opens
-        # the game. Resolved character is shared with the bridge as slot data.
+        # Real generation: resolve Random Start once and publish via slot data.
         self.resolved_start = self.random.randrange(3) if option == 3 else option
         self.starting_mask = 7 if self.resolved_start == 4 else 1 << self.resolved_start
 
@@ -332,11 +359,17 @@ class MTIAAWorld(World):
                 or period_unlocked(state, 11)
             )
 
-        def can_use_computer(state, period):
-            return period_unlocked(state, period) and (
-                period >= 5
-                or (has(state, "Computer Password") and period_unlocked(state, 4))
+        def can_use_computer(state, earliest_period):
+            # School computer: password required, available from Monday P4.
+            # Home computer: available without a password only at the end
+            # of each school day (periods 5, 10, 15, and 20).
+            # A page cannot be checked before its own earliest period.
+            school_access = (
+                has(state, "Computer Password")
+                and period_unlocked(state, max(4, earliest_period))
             )
+            first_home_period = max(5, ((earliest_period + 4) // 5) * 5)
+            return school_access or period_unlocked(state, first_home_period)
 
         def can_access_spaceship(state):
             return has(state, "Alien Device") and can_reach_period(state, 6)
