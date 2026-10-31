@@ -1,0 +1,10 @@
+{
+  "game": "My Teacher Is an Alien",
+  "minimum_ap_version": "0.6.7",
+  "world_version": "0.1.0",
+  "authors": [
+    "JasonArilani"
+  ],
+  "version": 13,
+  "compatible_version": 13
+}
