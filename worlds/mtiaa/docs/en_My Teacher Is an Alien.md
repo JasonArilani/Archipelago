@@ -6,7 +6,7 @@
 
 The Archipelago world randomizes story inventory items, investigation knowledge, character unlocks, and progression through the school schedule. Finding a location sends an Archipelago check; the item originally found there may instead arrive later through the multiworld.
 
-The game includes checks for classroom activities, school exploration, alien-detection tests, student rescues, spaceship puzzles, and endings. There are 81 defined location checks, though the number active in a generated seed depends on the selected ending goal.
+The game includes checks for classroom activities, school exploration, alien-detection tests, student rescues, spaceship puzzles, and endings. There are 83 defined location checks, with up to 81 active in a generated seed depending on the selected ending goal.
 
 The randomizer is designed around repeated school weeks. Starting a New Game resets the game's story progress, while previously completed Archipelago locations and received items remain associated with the current seed. Players can therefore return to earlier periods with additional items or unlocked characters.
 
@@ -23,7 +23,7 @@ The randomizer is designed around repeated school weeks. Starting a New Game res
 
 **Goal** can require Any Ending, Peter's Ending, Susan's Ending, Duncan's Ending, or All Three Endings.
 
-**Require Full Ending** adds the requirement to rescue all six students for the relevant ending or endings.
+**Full Ending** adds the requirement to rescue all six students for the relevant ending or endings.
 
 ## How do I play?
 
