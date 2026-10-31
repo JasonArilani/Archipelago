@@ -175,10 +175,8 @@ ITEMS = {
 
 
 class StartingCharacter(Choice):
-    """Pick a starting character, or unlock the entire cast immediately.
-
-    `random_start` is the YAML spelling of Random because AP reserves the
-    literal YAML value `random` for randomizing the option itself.
+    """Pick a starting character. Random Start chooses one of the three characters at random.
+    All Three starts with every character unlocked and removes Character Unlock items from the pool.
     """
     display_name = "Starting Character"
     option_peter = 0
@@ -190,6 +188,9 @@ class StartingCharacter(Choice):
 
 
 class Goal(Choice):
+    """Choose your victory condition. A specific character's ending requires completing the game as that character.
+    Any Ending allows you to win with any character. All Endings requires completing the game as all three characters separately.
+    """
     display_name = "Goal"
     option_any_ending = 0
     option_peter_ending = 1
@@ -200,6 +201,9 @@ class Goal(Choice):
 
 
 class FullEnding(Toggle):
+    """If enabled, you must also rescue all six students for your chosen goal.
+    If you choose All Endings, you must complete the Full Ending separately for each of the three characters.
+    """
     display_name = "Require Full Ending"
     default = 0
 
