@@ -1,5 +1,5 @@
 """MTIAA: conditional ending rewards, ending goals, and Period 20 access."""
-from BaseClasses import Item, ItemClassification, Location, Region
+from BaseClasses import Item, ItemClassification, Location, Region, Tutorial
 from dataclasses import dataclass
 from Options import Choice, PerGameCommonOptions, StartInventoryPool, Toggle
 from worlds.AutoWorld import World, WebWorld
@@ -226,6 +226,14 @@ class MTIAALocation(Location):
 
 class MTIAAWebWorld(WebWorld):
     theme = "partyTime"
+    tutorials = [Tutorial(
+        "Setup Guide",
+        "A guide to setting up My Teacher Is an Alien for Archipelago.",
+        "English",
+        "setup_en.md",
+        "setup/en",
+        ["JasonArilani"],
+    )]
 
 
 class MTIAAWorld(World):
