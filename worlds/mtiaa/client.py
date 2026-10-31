@@ -20,6 +20,7 @@ except ImportError:
 else:
     TRACKER_AVAILABLE = True
 from NetUtils import ClientStatus
+from .world import LOCATIONS, ALL_ENDING_LOCATIONS, REGULAR_ENDINGS, FULL_ENDINGS
 from .bridge_files import (GAME_ITEMS, FILLER_ITEMS, world_token, write_world_binding,
                            read_applied, read_events_since, write_grant_if_free)
 
@@ -132,28 +133,32 @@ class MTIAAContext(BaseMTIAAContext):
 
 
 def ending_check_ids(goal, full):
+    """New AP IDs, selected by name to avoid hardcoded ID dependencies."""
     if goal == 0:
-        return {1083 if full else 1079}
+        return {LOCATIONS["Complete Any Full Ending" if full else "Complete Any Ending"]}
     if goal == 4:
-        return ({1080, 1081, 1082} if full else {1045, 1046, 1047})
-    character_ids = {1: (1045, 1080), 2: (1047, 1082), 3: (1046, 1081)}
-    regular, completed = character_ids[goal]
-    return {completed if full else regular}
+        names = FULL_ENDINGS.values() if full else REGULAR_ENDINGS.values()
+        return {LOCATIONS[name] for name in names}
+    character = {1: "Peter", 2: "Susan", 3: "Duncan"}[goal]
+    return {LOCATIONS[(FULL_ENDINGS if full else REGULAR_ENDINGS)[character]]}
 
 
 def active_ending_ids(goal, full):
+    """All ending locations present in this goal configuration."""
     if goal == 0:
-        result = {1079}
+        names = ["Complete Any Ending"]
         if full:
-            result.add(1083)
-        return result
-    if goal == 4:
-        result = {1045, 1046, 1047}
+            names.append("Complete Any Full Ending")
+    elif goal == 4:
+        names = list(REGULAR_ENDINGS.values())
         if full:
-            result.update({1080, 1081, 1082})
-        return result
-    regular, completed = {1: (1045, 1080), 2: (1047, 1082), 3: (1046, 1081)}[goal]
-    return {regular, completed} if full else {regular}
+            names.extend(FULL_ENDINGS.values())
+    else:
+        character = {1: "Peter", 2: "Susan", 3: "Duncan"}[goal]
+        names = [REGULAR_ENDINGS[character]]
+        if full:
+            names.append(FULL_ENDINGS[character])
+    return {LOCATIONS[name] for name in names}
 
 
 def outstanding_receipts(ctx):
@@ -177,7 +182,7 @@ async def bridge_watcher(ctx):
             if ctx._server_connected and ctx._world is not None:
                 offset, checks, epoch, changed = read_events_since(ctx._events, ctx._event_offset, ctx._world)
                 ctx._event_offset = offset
-                active_checks = set(range(1001, 1079)) - {1045, 1046, 1047}
+                active_checks = set(LOCATIONS.values()) - {LOCATIONS[name] for name in ALL_ENDING_LOCATIONS}
                 active_checks.update(active_ending_ids(ctx._goal, ctx._full_ending))
                 ctx._seen_checks.update(checks & active_checks)
                 if changed and epoch != ctx._epoch:
